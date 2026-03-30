@@ -34,6 +34,7 @@
     "masterData": "Master Data",
     "devProgress": "Dev Progress",
     "testReports": "Test Reports",
+    "userGuide": "User Guide",
     "settings": "Settings",
     "help": "Help & Support",
     "version": "v0.1.0 — Sprint 1",
@@ -1760,5 +1761,36 @@
     "status": "Status",
     "active": "Active",
     "inactive": "Inactive"
+  },
+  "userGuide": {
+    "title": "User Guide",
+    "subtitle": "Video tutorials, step-by-step instructions, and interactive tours",
+    "recordDemos": "Record Demo Videos",
+    "recording": "Recording...",
+    "recordingDesc": "Chrome is recording demo videos for each module. This may take 5-10 minutes.",
+    "gettingStarted": "Getting Started",
+    "events": "Events & RFx",
+    "templates": "Templates",
+    "evaluations": "Evaluations",
+    "awardsContracts": "Awards & Contracts",
+    "suppliers": "Suppliers",
+    "admin": "Administration",
+    "settings": "Settings & Preferences",
+    "analytics": "Analytics & Deadlines",
+    "playVideo": "Play Video",
+    "downloadVideo": "Download",
+    "viewSteps": "View Steps",
+    "hideSteps": "Hide Steps",
+    "noVideos": "No demo videos recorded yet",
+    "noVideosHint": "Click \"Record Demo Videos\" to generate video tutorials for each module",
+    "duration": "Duration"
+  },
+  "guidedTour": {
+    "next": "Next",
+    "back": "Back",
+    "skip": "Skip Tour",
+    "finish": "Finish",
+    "stepOf": "{current} of {total}",
+    "takeTour": "Take Tour"
   }
 }

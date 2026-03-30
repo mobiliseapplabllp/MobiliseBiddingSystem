@@ -20,6 +20,7 @@ const labelMap: Record<string, string> = {
   users: 'Users & Roles',
   'dev-progress': 'Dev Progress',
   'test-reports': 'Test Reports',
+  'user-guide': 'User Guide',
   invitations: 'Invitations',
   bids: 'Bids',
   templates: 'Templates',

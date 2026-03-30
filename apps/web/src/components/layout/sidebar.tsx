@@ -19,6 +19,7 @@ import {
   Database,
   Code2,
   Bot,
+  BookOpen,
 } from 'lucide-react';
 import { useSidebar } from './sidebar-context';
 import { useAuth } from '@/lib/auth-context';
@@ -52,6 +53,7 @@ const adminNav: NavItemConfig[] = [
   { nameKey: 'nav.masterData', fallback: 'Master Data', href: '/admin/master-data', icon: Database },
   { nameKey: 'nav.devProgress', fallback: 'Dev Progress', href: '/admin/dev-progress', icon: Code2 },
   { nameKey: 'nav.testReports', fallback: 'Test Reports', href: '/admin/test-reports', icon: Bot },
+  { nameKey: 'nav.userGuide', fallback: 'User Guide', href: '/admin/user-guide', icon: BookOpen },
 ];
 
 function NavItem({

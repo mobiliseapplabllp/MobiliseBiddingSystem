@@ -344,6 +344,74 @@ export class SystemController {
     res.send(buf);
   }
 
+  // ── Demo Video Recording & Serving ──────────────────────────────────────────
+
+  private demoRecording = false;
+
+  private readonly demoMeta: Record<string, { title: string; description: string; duration: string; section: string }> = {
+    '01-login-dashboard': { title: 'Login & Dashboard Overview', description: 'Sign in and explore the main dashboard with KPIs, activity feed, and deadlines.', duration: '0:30', section: 'getting-started' },
+    '02-create-rfq': { title: 'Create an RFQ Event', description: 'Create a Request for Quotation with lots, deadlines, and supplier invitations.', duration: '0:45', section: 'events' },
+    '03-create-auction': { title: 'Create a Reverse Auction', description: 'Set up a competitive bidding auction with rules, timing, and extensions.', duration: '0:45', section: 'events' },
+    '04-templates': { title: 'Templates Library', description: 'Browse 7 pre-built templates and create events instantly.', duration: '0:30', section: 'templates' },
+    '05-evaluations': { title: 'Evaluations', description: 'Create evaluations with envelope types, criteria, and scoring.', duration: '0:40', section: 'evaluations' },
+    '06-awards-contracts': { title: 'Awards & Contracts', description: 'Manage award recommendations and contract lifecycle.', duration: '0:30', section: 'awards-contracts' },
+    '07-suppliers': { title: 'Supplier Directory', description: 'Browse, search, and view supplier profiles and qualifications.', duration: '0:30', section: 'suppliers' },
+    '08-admin-orgs-users': { title: 'Organisations & Users', description: 'Manage organisations, business units, users, and role assignments.', duration: '0:40', section: 'admin' },
+    '09-master-data': { title: 'Master Data Management', description: 'Configure currencies, countries, UOMs, payment terms, and more.', duration: '0:30', section: 'admin' },
+    '10-settings': { title: 'Settings & Profile', description: 'Configure theme, notification preferences, security, and view profile.', duration: '0:30', section: 'settings' },
+    '11-notifications': { title: 'Notification Center', description: 'View, filter, and manage notifications across all modules.', duration: '0:20', section: 'settings' },
+    '12-analytics-deadlines': { title: 'Analytics & Deadlines', description: 'Monitor analytics dashboards and track upcoming submission deadlines.', duration: '0:30', section: 'analytics' },
+  };
+
+  @Post('record-demos')
+  @Roles('PLATFORM_ADMIN', 'ORG_ADMIN')
+  @ApiOperation({ summary: 'Trigger demo video recording (non-blocking)' })
+  async recordDemos() {
+    if (this.demoRecording) return { status: 'already_recording' };
+    this.demoRecording = true;
+    const cwd = join(process.cwd(), '..', '..');
+    this.logger.log('Starting demo video recording...');
+    exec(
+      'npx playwright test e2e/demo-recorder.spec.ts --headed --reporter=list',
+      { cwd, timeout: 600000, maxBuffer: 10 * 1024 * 1024 },
+      () => { this.demoRecording = false; this.logger.log('Demo recording finished'); },
+    );
+    return { status: 'started' };
+  }
+
+  @Get('demo-videos')
+  @UseGuards()
+  @ApiOperation({ summary: 'List available demo videos with metadata' })
+  async listDemoVideos() {
+    const cwd = join(process.cwd(), '..', '..');
+    const dir = join(cwd, 'e2e', 'demo-videos');
+    let files: string[] = [];
+    try {
+      if (existsSync(dir)) files = readdirSync(dir).filter((f) => f.endsWith('.webm') || f.endsWith('.mp4')).sort();
+    } catch { /* ignore */ }
+    return files.map((f) => {
+      const slug = f.replace(/\.(webm|mp4)$/, '');
+      const meta = this.demoMeta[slug] ?? { title: slug, description: '', duration: '0:30', section: 'other' };
+      return { filename: f, slug, ...meta };
+    });
+  }
+
+  @Get('demo-videos/:filename')
+  @UseGuards()
+  @ApiOperation({ summary: 'Serve a demo video file (public)' })
+  async serveDemoVideo(@Param('filename') filename: string, @Res() res: Response) {
+    const safe = filename.replace(/[^a-zA-Z0-9._-]/g, '');
+    if (!safe.endsWith('.webm') && !safe.endsWith('.mp4')) { res.status(404).send('Not found'); return; }
+    const cwd = join(process.cwd(), '..', '..');
+    const filePath = join(cwd, 'e2e', 'demo-videos', safe);
+    if (!existsSync(filePath)) { res.status(404).send('Not found'); return; }
+    const buf = readFileSync(filePath);
+    res.setHeader('Content-Type', safe.endsWith('.webm') ? 'video/webm' : 'video/mp4');
+    res.setHeader('Content-Length', buf.length);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(buf);
+  }
+
   // ── Utilities ───────────────────────────────────────────────────────────────
 
   private formatUptime(seconds: number): string {

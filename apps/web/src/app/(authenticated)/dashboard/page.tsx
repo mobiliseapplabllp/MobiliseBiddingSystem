@@ -28,6 +28,9 @@ import {
   Loader2,
 } from 'lucide-react';
 import { OnboardingWizard, useOnboarding } from '@/components/onboarding/OnboardingWizard';
+import { GuidedTour, useTour } from '@/components/guide/GuidedTour';
+import { dashboardTour } from '@/components/guide/tour-configs';
+import { HelpCircle } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -188,6 +191,8 @@ export default function DashboardPage() {
   const [liveAuctions, setLiveAuctions] = useState<LiveAuction[] | null>(null);
   const [errors, setErrors] = useState<Record<string, boolean>>({});
   const { show: showOnboarding, dismiss: dismissOnboarding } = useOnboarding();
+  const [showTour, setShowTour] = useState(false);
+  const { completed: tourCompleted } = useTour('dashboard');
 
   useEffect(() => {
     getProfile()
@@ -297,17 +302,37 @@ export default function DashboardPage() {
             {t('subtitle')}
           </p>
         </div>
-        <Link
-          href="/events/create"
-          className="btn-primary hidden md:inline-flex"
-        >
-          <FileText className="h-4 w-4" />
-          {t('newEvent')}
-        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowTour(true)}
+            className="h-9 w-9 rounded-lg flex items-center justify-center text-text-muted hover:text-accent hover:bg-accent/5 transition-colors border border-border"
+            title="Take Tour"
+          >
+            <HelpCircle className="h-4 w-4" />
+          </button>
+          <Link
+            href="/events/create"
+            className="btn-primary hidden md:inline-flex"
+            data-tour="new-event"
+          >
+            <FileText className="h-4 w-4" />
+            {t('newEvent')}
+          </Link>
+        </div>
       </div>
 
+      {/* Guided Tour */}
+      {showTour && (
+        <GuidedTour
+          tourId="dashboard"
+          steps={dashboardTour}
+          onComplete={() => setShowTour(false)}
+          onSkip={() => setShowTour(false)}
+        />
+      )}
+
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div data-tour="kpi-cards" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {kpiCards
           ? kpiCards.map((kpi) => (
               <div
@@ -333,7 +358,7 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Recent Activity */}
-        <div className="bg-bg-surface border border-border rounded-lg shadow-card">
+        <div data-tour="recent-activity" className="bg-bg-surface border border-border rounded-lg shadow-card">
           <div className="px-5 py-4 border-b border-border flex items-center justify-between">
             <h2 className="text-sub-section text-text-primary flex items-center gap-2">
               <Clock className="h-4 w-4 text-text-muted" />
@@ -381,7 +406,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Pending Actions */}
-        <div className="bg-bg-surface border border-border rounded-lg shadow-card">
+        <div data-tour="pending-actions" className="bg-bg-surface border border-border rounded-lg shadow-card">
           <div className="px-5 py-4 border-b border-border flex items-center justify-between">
             <h2 className="text-sub-section text-text-primary flex items-center gap-2">
               <AlertTriangle className="h-4 w-4 text-warning" />
@@ -492,7 +517,7 @@ export default function DashboardPage() {
       )}
 
       {/* Upcoming Deadlines */}
-      <div className="mt-6 bg-bg-surface border border-border rounded-lg shadow-card">
+      <div data-tour="deadlines" className="mt-6 bg-bg-surface border border-border rounded-lg shadow-card">
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
           <h2 className="text-sub-section text-text-primary flex items-center gap-2">
             <Calendar className="h-4 w-4 text-text-muted" />
