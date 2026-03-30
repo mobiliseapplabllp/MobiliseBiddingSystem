@@ -1,0 +1,27 @@
+{
+  "name": "esourcing",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "db:migrate": "npm run migrate:deploy --workspace=packages/prisma",
+    "db:seed": "npm run seed --workspace=packages/prisma",
+    "db:studio": "npm run studio --workspace=packages/prisma"
+  },
+  "devDependencies": {
+    "turbo": "^2.4.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "npm@11.9.0",
+  "dependencies": {
+    "docx": "^9.6.1"
+  }
+}

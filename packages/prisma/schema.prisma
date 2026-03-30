@@ -1,0 +1,1267 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration 001: Multi-Tenancy Core
+// ═══════════════════════════════════════════════════════
+
+model Organisation {
+  id              String         @id @default(uuid())
+  name            String
+  country         String
+  subdomain       String         @unique
+  brandingJson    Json?
+  defaultCurrency String         @default("USD")
+  defaultLocale   String         @default("en")
+  buIsolation     Boolean        @default(true)
+  retentionYears  Int            @default(7)
+  isActive        Boolean        @default(true)
+  ssoConfig       Json?
+  supplierType    Boolean        @default(false)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  businessUnits   BusinessUnit[]
+  users           User[]
+  userOrgRoles    UserOrgRole[]
+  supplierProfile SupplierProfile?
+
+  @@map("organisations")
+}
+
+model BusinessUnit {
+  id       String       @id @default(uuid())
+  orgId    String
+  org      Organisation @relation(fields: [orgId], references: [id])
+  name     String
+  code     String
+  currency String?
+  damJson  Json?
+  isActive Boolean      @default(true)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  userOrgRoles UserOrgRole[]
+
+  @@unique([orgId, code])
+  @@map("business_units")
+}
+
+model PlatformConfig {
+  id    String @id @default(uuid())
+  key   String @unique
+  value Json
+  description String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("platform_config")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration 002: Auth & RBAC
+// ═══════════════════════════════════════════════════════
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  status        String    @default("ACTIVE")
+  mfaEnabled    Boolean   @default(false)
+  mfaSecret     String?
+  preferredLocale String  @default("en")  // en, ar, fr, etc.
+  preferredTheme  String  @default("light") // light, dark, system
+  lastLoginAt   DateTime?
+  orgId         String?
+  org           Organisation? @relation(fields: [orgId], references: [id])
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions      Session[]
+  refreshTokens RefreshToken[]
+  userOrgRoles  UserOrgRole[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ipAddress String?
+  userAgent String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model RolePermission {
+  id         String @id @default(uuid())
+  role       String
+  permission String
+  createdAt  DateTime @default(now())
+
+  @@unique([role, permission])
+  @@map("role_permissions")
+}
+
+model UserOrgRole {
+  id       String        @id @default(uuid())
+  userId   String
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId    String
+  org      Organisation  @relation(fields: [orgId], references: [id])
+  buId     String?
+  bu       BusinessUnit? @relation(fields: [buId], references: [id])
+  role     String
+  damLevel String?
+  createdAt DateTime     @default(now())
+
+  @@unique([userId, orgId, buId, role])
+  @@index([orgId])
+  @@map("user_org_roles")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration 004: Audit Log & Analytics Events
+// Must be applied to ALL future tables as they are created
+// ═══════════════════════════════════════════════════════
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  orgId       String?
+  buId        String?
+  userId      String?
+  action      String   // e.g. CREATE, UPDATE, DELETE, LOGIN, LOGOUT
+  entityType  String   // e.g. RFX_EVENT, BID, AWARD, USER
+  entityId    String?
+  oldValue    Json?
+  newValue    Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([orgId])
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration 005: RFx Module — Events, Lots, Line Items
+// ═══════════════════════════════════════════════════════
+
+model RfxEvent {
+  id            String    @id @default(uuid())
+  orgId         String
+  buId          String?
+  refNumber     String    // e.g. RFQ-2026-001
+  title         String
+  description   String?
+  type          String    // RFI | RFP | RFQ | ITT
+  status        String    @default("DRAFT") // DRAFT | PUBLISHED | CLOSED | CANCELLED | AWARDED
+  currency      String    @default("USD")
+  submissionDeadline DateTime?
+  clarificationDeadline DateTime?
+  openingDate   DateTime?
+  estimatedValue Decimal?
+  internalRef   String?
+  auctionConfig Json?         // Auction rules configured at RFx creation (type, pricing, extension, visibility)
+  hasAuctionPhase Boolean  @default(false)  // Quick flag: does this event include an auction phase?
+  auctionStatus   String?                   // null | SCHEDULED | OPEN | CLOSED
+  auctionStartAt  DateTime?
+  auctionEndAt    DateTime?
+  createdById   String
+  publishedAt   DateTime?
+  closedAt      DateTime?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  lots          RfxLot[]
+  invitations   SupplierInvitation[]
+  bids          BidSubmission[]
+  auctions      Auction[]
+  evaluations   Evaluation[]
+  awards        Award[]
+  contracts     Contract[]
+
+  @@index([orgId])
+  @@index([buId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("rfx_events")
+}
+
+model RfxLot {
+  id          String    @id @default(uuid())
+  eventId     String
+  event       RfxEvent  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  orgId       String
+  lotNumber   Int
+  title       String
+  description String?
+  currency    String?
+  estimatedValue Decimal?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  lineItems   RfxLineItem[]
+  bids        BidSubmission[]
+
+  @@index([eventId])
+  @@index([orgId])
+  @@map("rfx_lots")
+}
+
+model RfxLineItem {
+  id          String   @id @default(uuid())
+  lotId       String
+  lot         RfxLot   @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  orgId       String
+  itemNumber  Int
+  description String
+  quantity    Decimal?
+  uom         String?  // unit of measure: KG, EA, M2, etc.
+  targetPrice Decimal?
+  notes       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([lotId])
+  @@index([orgId])
+  @@map("rfx_line_items")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration 006: Sprint 3 — Supplier Responses
+// ═══════════════════════════════════════════════════════
+
+model SupplierInvitation {
+  id          String    @id @default(uuid())
+  eventId     String
+  event       RfxEvent  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  orgId       String                      // buyer org
+  supplierId  String                      // supplier org id
+  supplierEmail String                    // contact email (may be external pre-registration)
+  supplierName  String
+  status      String    @default("PENDING") // PENDING | ACCEPTED | DECLINED | REVOKED
+  token       String    @unique             // secure token for supplier login link
+  sentAt      DateTime?
+  respondedAt DateTime?
+  message     String?                       // optional personalised message
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  bids        BidSubmission[]
+
+  @@index([eventId])
+  @@index([orgId])
+  @@index([supplierId])
+  @@index([token])
+  @@map("supplier_invitations")
+}
+
+model BidSubmission {
+  id            String   @id @default(uuid())
+  eventId       String
+  event         RfxEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  invitationId  String
+  invitation    SupplierInvitation @relation(fields: [invitationId], references: [id])
+  orgId         String             // buyer org
+  supplierId    String             // supplier org id
+  lotId         String?            // null = event-level bid
+  lot           RfxLot?  @relation(fields: [lotId], references: [id])
+  status        String   @default("DRAFT") // DRAFT | SUBMITTED | WITHDRAWN | DISQUALIFIED
+  totalPrice    Decimal?
+  currency      String   @default("USD")
+  notes         String?
+  submittedAt   DateTime?
+  withdrawnAt   DateTime?
+  version       Int      @default(1)       // incremented on amendment
+  shortlisted   Boolean  @default(false)   // true = bid shortlisted after evaluation
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  lineItems     BidLineItem[]
+  documents     BidDocument[]
+
+  @@index([eventId])
+  @@index([orgId])
+  @@index([supplierId])
+  @@index([invitationId])
+  @@index([status])
+  @@map("bid_submissions")
+}
+
+model BidLineItem {
+  id            String        @id @default(uuid())
+  bidId         String
+  bid           BidSubmission @relation(fields: [bidId], references: [id], onDelete: Cascade)
+  rfxLineItemId String?       // links back to the buyer's line item
+  orgId         String
+  description   String
+  quantity      Decimal?
+  uom           String?
+  unitPrice     Decimal?
+  totalPrice    Decimal?
+  notes         String?
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([bidId])
+  @@index([orgId])
+  @@map("bid_line_items")
+}
+
+model BidDocument {
+  id            String        @id @default(uuid())
+  bidId         String
+  bid           BidSubmission @relation(fields: [bidId], references: [id], onDelete: Cascade)
+  orgId         String
+  fileName      String
+  fileSize      Int
+  mimeType      String
+  storageKey    String        // S3/MinIO object key
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([bidId])
+  @@index([orgId])
+  @@map("bid_documents")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration: Master Data Management (MDM)
+// Generic reference data table — one table for all lookup
+// types: CURRENCY, COUNTRY, TIMEZONE, UOM, PAYMENT_TERM,
+// INCOTERM, SPEND_CATEGORY, DOCUMENT_TYPE, CONTRACT_TYPE,
+// AWARD_CRITERIA, REJECTION_REASON, EVALUATION_CRITERIA,
+// LANGUAGE. orgId=null means platform default; orgId set
+// means org-specific addition/override.
+// ═══════════════════════════════════════════════════════
+
+model ReferenceData {
+  id        String   @id @default(uuid())
+  type      String   // See MDM type list above
+  orgId     String?  // null = platform default; set = org custom
+  code      String   // ISO code or internal slug
+  label     String   // Human-readable display name
+  metadata  Json?    // Type-specific extras: { symbol, decimals, group, ... }
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([type, code, orgId])
+  @@index([type, orgId, isActive])
+  @@map("reference_data")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 4: RFx Templates
+// ═══════════════════════════════════════════════════════
+
+model RfxTemplate {
+  id          String   @id @default(uuid())
+  orgId       String
+  buId        String?
+  name        String
+  description String?
+  type        String   // RFI | RFP | RFQ | ITT
+  currency    String   @default("USD")
+  // Snapshot of lots + line items as JSON to avoid complex relational cloning
+  lotsJson    Json?
+  isActive    Boolean  @default(true)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([type])
+  @@map("rfx_templates")
+}
+
+model AnalyticsEvent {
+  id          String   @id @default(uuid())
+  orgId       String?
+  buId        String?
+  userId      String?
+  eventType   String   // e.g. RFX_PUBLISHED, BID_SUBMITTED, AWARD_MADE
+  entityType  String
+  entityId    String?
+  properties  Json?    // flexible key-value pairs for analytics
+  occurredAt  DateTime @default(now())
+
+  @@index([orgId])
+  @@index([eventType])
+  @@index([occurredAt])
+  @@map("analytics_events")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 6: Reverse Auction Engine
+// ═══════════════════════════════════════════════════════
+
+model Auction {
+  id              String    @id @default(uuid())
+  orgId           String
+  buId            String?
+  rfxEventId      String?
+  rfxEvent        RfxEvent? @relation(fields: [rfxEventId], references: [id])
+  refNumber       String    // e.g. AUC-2026-001
+  title           String
+  description     String?
+
+  // Auction configuration
+  auctionType     String    @default("ENGLISH") // ENGLISH | DUTCH | JAPANESE | RANK_ONLY | RANK_WITH_WINNING_BID | VICKREY | MULTI_ATTRIBUTE
+  status          String    @default("DRAFT")   // DRAFT | PUBLISHED | OPEN | CLOSED | EVALUATED | AWARDED
+  currency        String    @default("USD")
+  startAt         DateTime?
+  endAt           DateTime?
+  actualEndAt     DateTime? // Updated when extensions occur
+
+  // Pricing rules
+  reservePrice    Decimal?  @db.Decimal(65, 30)
+  startingPrice   Decimal?  @db.Decimal(65, 30)
+  decrementMin    Decimal?  @db.Decimal(65, 30) // Minimum bid decrease required
+  decrementMax    Decimal?  @db.Decimal(65, 30) // Maximum bid decrease allowed
+
+  // Extension rules
+  extensionMinutes        Int @default(5)  // How many minutes to extend by
+  extensionTriggerMinutes Int @default(5)  // Extend if bid arrives within last N minutes
+  maxExtensions           Int?             // null = unlimited
+  extensionCount          Int @default(0)  // Current count of extensions applied
+
+  // Visibility
+  bidVisibility   String    @default("RANK_ONLY") // RANK_ONLY | RANK_AND_PRICE | SEALED
+  allowTiedBids   Boolean   @default(false)
+
+  // Timestamps
+  publishedAt     DateTime?
+  openedAt        DateTime?
+  closedAt        DateTime?
+  createdById     String
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  lots            AuctionLot[]
+  invitations     AuctionInvitation[]
+  bids            AuctionBid[]
+  extensions      AuctionExtension[]
+  proxyBids       ProxyBid[]
+
+  @@index([orgId])
+  @@index([buId])
+  @@index([rfxEventId])
+  @@index([status])
+  @@index([startAt])
+  @@index([endAt])
+  @@index([createdAt])
+  @@map("auctions")
+}
+
+model AuctionLot {
+  id            String    @id @default(uuid())
+  auctionId     String
+  auction       Auction   @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  orgId         String
+  lotNumber     Int
+  title         String
+  description   String?
+  currency      String?
+  reservePrice  Decimal?  @db.Decimal(65, 30)
+  startingPrice Decimal?  @db.Decimal(65, 30)
+  decrementMin  Decimal?  @db.Decimal(65, 30)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  lineItems     AuctionLineItem[]
+  bids          AuctionBid[]
+
+  @@index([auctionId])
+  @@index([orgId])
+  @@map("auction_lots")
+}
+
+model AuctionLineItem {
+  id          String    @id @default(uuid())
+  lotId       String
+  lot         AuctionLot @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  orgId       String
+  itemNumber  Int
+  description String
+  quantity    Decimal?  @db.Decimal(65, 30)
+  uom         String?
+  targetPrice Decimal?  @db.Decimal(65, 30)
+  notes       String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([lotId])
+  @@index([orgId])
+  @@map("auction_line_items")
+}
+
+model AuctionInvitation {
+  id            String    @id @default(uuid())
+  auctionId     String
+  auction       Auction   @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  orgId         String    // Buyer org
+  supplierId    String    // Supplier org ID
+  supplierEmail String
+  supplierName  String
+  status        String    @default("PENDING") // PENDING | ACCEPTED | DECLINED | REVOKED
+  token         String    @unique @default(uuid())
+  sentAt        DateTime?
+  respondedAt   DateTime?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  bids          AuctionBid[]
+  proxyBids     ProxyBid[]
+
+  @@index([auctionId])
+  @@index([orgId])
+  @@index([supplierId])
+  @@index([token])
+  @@map("auction_invitations")
+}
+
+model AuctionBid {
+  id              String    @id @default(uuid())
+  auctionId       String
+  auction         Auction   @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  lotId           String?
+  lot             AuctionLot? @relation(fields: [lotId], references: [id], onDelete: SetNull)
+  invitationId    String
+  invitation      AuctionInvitation @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  orgId           String    // Buyer org (for RLS)
+  supplierId      String    // Supplier org ID
+
+  bidPrice        Decimal   @db.Decimal(65, 30)
+  currency        String    @default("USD")
+  rank            Int?      // Computed after each bid
+  status          String    @default("ACTIVE") // ACTIVE | REJECTED | WITHDRAWN
+  rejectionReason String?
+  bidNumber       Int       // Sequential per supplier per auction
+
+  placedAt        DateTime  @default(now())
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([auctionId])
+  @@index([lotId])
+  @@index([supplierId])
+  @@index([orgId])
+  @@index([placedAt])
+  @@index([auctionId, lotId, supplierId])
+  @@map("auction_bids")
+}
+
+model AuctionExtension {
+  id               String   @id @default(uuid())
+  auctionId        String
+  auction          Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  orgId            String
+  triggeredByBidId String?
+  previousEndAt    DateTime
+  newEndAt         DateTime
+  extensionNumber  Int
+  createdAt        DateTime @default(now())
+
+  @@index([auctionId])
+  @@index([orgId])
+  @@map("auction_extensions")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 7: Proxy Bidding
+// ═══════════════════════════════════════════════════════
+
+model ProxyBid {
+  id            String   @id @default(uuid())
+  auctionId     String
+  auction       Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  invitationId  String
+  invitation    AuctionInvitation @relation(fields: [invitationId], references: [id])
+  orgId         String    // Buyer org (for RLS)
+  supplierId    String    // Supplier org
+  minPrice      Decimal   @db.Decimal(65, 30)  // Lowest price the supplier is willing to go
+  decrementStep Decimal   @db.Decimal(65, 30)  // Amount to auto-decrement each time outbid
+  isActive      Boolean   @default(true)
+  lastTriggeredAt DateTime?
+  totalBidsPlaced Int     @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([auctionId, supplierId])
+  @@index([auctionId])
+  @@index([orgId])
+  @@map("proxy_bids")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 9: Evaluation & Scoring Framework
+// ═══════════════════════════════════════════════════════
+
+model Evaluation {
+  id             String    @id @default(uuid())
+  orgId          String
+  buId           String?
+  rfxEventId     String
+  rfxEvent       RfxEvent  @relation(fields: [rfxEventId], references: [id])
+  title          String
+  description    String?
+  envelopeType   String    @default("SINGLE")  // SINGLE | DOUBLE | THREE_ENVELOPE
+  status         String    @default("DRAFT")    // DRAFT | IN_PROGRESS | COMPLETED | CANCELLED
+  technicalWeight Decimal?  @db.Decimal(5, 2)   // e.g. 70.00 (%)
+  commercialWeight Decimal? @db.Decimal(5, 2)   // e.g. 30.00 (%)
+  createdById    String
+  publishedAt    DateTime?
+  completedAt    DateTime?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  criteria       EvaluationCriterion[]
+  assignments    EvaluatorAssignment[]
+  scores         EvaluationScore[]
+  awards         Award[]
+
+  @@index([orgId])
+  @@index([rfxEventId])
+  @@index([status])
+  @@map("evaluations")
+}
+
+model EvaluationCriterion {
+  id            String     @id @default(uuid())
+  evaluationId  String
+  evaluation    Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  orgId         String
+  name          String
+  description   String?
+  envelope      String     @default("TECHNICAL")  // TECHNICAL | COMMERCIAL | GENERAL
+  weight        Decimal    @db.Decimal(5, 2)       // Percentage weight within envelope
+  maxScore      Int        @default(10)
+  sortOrder     Int        @default(0)
+  isActive      Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+
+  scores        EvaluationScore[]
+
+  @@index([evaluationId])
+  @@index([orgId])
+  @@map("evaluation_criteria_items")
+}
+
+model EvaluatorAssignment {
+  id            String     @id @default(uuid())
+  evaluationId  String
+  evaluation    Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  orgId         String
+  evaluatorId   String     // User ID of the evaluator
+  envelope      String     @default("TECHNICAL")  // Which envelope they evaluate
+  status        String     @default("PENDING")     // PENDING | IN_PROGRESS | COMPLETED | RECUSED
+  assignedAt    DateTime   @default(now())
+  completedAt   DateTime?
+  isActive      Boolean    @default(true)
+
+  @@unique([evaluationId, evaluatorId, envelope])
+  @@index([evaluationId])
+  @@index([orgId])
+  @@index([evaluatorId])
+  @@map("evaluator_assignments")
+}
+
+model EvaluationScore {
+  id            String     @id @default(uuid())
+  evaluationId  String
+  evaluation    Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  criterionId   String
+  criterion     EvaluationCriterion @relation(fields: [criterionId], references: [id], onDelete: Cascade)
+  orgId         String
+  evaluatorId   String     // Who gave this score
+  bidId         String     // Which bid/supplier is being scored
+  score         Decimal    @db.Decimal(5, 2)  // Actual score given
+  maxScore      Int                           // Max possible at time of scoring
+  comments      String?
+  isConsensus   Boolean    @default(false)    // true = consensus score submitted by evaluation owner
+  isActive      Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@unique([evaluationId, criterionId, evaluatorId, bidId])
+  @@index([evaluationId])
+  @@index([criterionId])
+  @@index([evaluatorId])
+  @@index([orgId])
+  @@map("evaluation_scores")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 11: Awards — Decision & Approval
+// ═══════════════════════════════════════════════════════
+
+model Award {
+  id             String    @id @default(uuid())
+  orgId          String
+  buId           String?
+  rfxEventId     String
+  rfxEvent       RfxEvent  @relation(fields: [rfxEventId], references: [id])
+  evaluationId   String?
+  evaluation     Evaluation? @relation(fields: [evaluationId], references: [id])
+  title          String
+  description    String?
+  awardMode      String    @default("WHOLE_EVENT") // WHOLE_EVENT | LOT_LEVEL | LINE_LEVEL | SPLIT | CONDITIONAL
+  status         String    @default("DRAFT")       // DRAFT | PENDING_APPROVAL | APPROVED | REJECTED | NOTIFIED | COMPLETED | CANCELLED
+  totalValue     Decimal?  @db.Decimal(65, 30)
+  currency       String    @default("USD")
+  approvedById   String?
+  approvedAt     DateTime?
+  rejectedReason String?
+  createdById    String
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  items          AwardItem[]
+  approvalSteps  AwardApproval[]
+  contracts      Contract[]
+
+  @@index([orgId])
+  @@index([buId])
+  @@index([rfxEventId])
+  @@index([evaluationId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("awards")
+}
+
+model AwardItem {
+  id              String   @id @default(uuid())
+  awardId         String
+  award           Award    @relation(fields: [awardId], references: [id], onDelete: Cascade)
+  orgId           String
+  lotId           String?
+  bidId           String?
+  supplierId      String
+  supplierName    String
+  awardedValue    Decimal  @db.Decimal(65, 30)
+  currency        String   @default("USD")
+  status          String   @default("AWARDED") // AWARDED | REJECTED | CONDITIONAL
+  rejectionReason String?  // use REJECTION_REASON from MDM
+  conditions      String?
+  notes           String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([awardId])
+  @@index([orgId])
+  @@index([supplierId])
+  @@map("award_items")
+}
+
+model AwardApproval {
+  id            String    @id @default(uuid())
+  awardId       String
+  award         Award     @relation(fields: [awardId], references: [id], onDelete: Cascade)
+  orgId         String
+  approverId    String    // userId
+  approverRole  String
+  level         Int       // approval level (1, 2, 3...)
+  status        String    @default("PENDING") // PENDING | APPROVED | REJECTED | SKIPPED
+  comments      String?
+  decidedAt     DateTime?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([awardId])
+  @@index([orgId])
+  @@index([approverId])
+  @@map("award_approvals")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 12: Contracts — Generation & Management
+// ═══════════════════════════════════════════════════════
+
+model Contract {
+  id              String    @id @default(uuid())
+  orgId           String
+  buId            String?
+  rfxEventId      String?
+  rfxEvent        RfxEvent? @relation(fields: [rfxEventId], references: [id])
+  awardId         String?
+  award           Award?    @relation(fields: [awardId], references: [id])
+  contractNumber  String    // Auto-generated e.g. CON-2026-001
+  title           String
+  description     String?
+  contractType    String    // From MDM CONTRACT_TYPE: FIXED_PRICE | TIME_AND_MATERIALS | FRAMEWORK | BLANKET_ORDER | SERVICE_AGREEMENT
+  status          String    @default("DRAFT") // DRAFT | UNDER_REVIEW | ACTIVE | SUSPENDED | EXPIRED | TERMINATED | RENEWED
+  supplierId      String
+  supplierName    String
+  totalValue      Decimal?  @db.Decimal(65, 30)
+  currency        String    @default("USD")
+  startDate       DateTime
+  endDate         DateTime
+  signedDate      DateTime?
+  paymentTerms    String?   // From MDM PAYMENT_TERM
+  incoterms       String?   // From MDM INCOTERM
+  terms           Json?     // Custom contract terms
+  createdById     String
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  amendments      ContractAmendment[]
+
+  @@index([orgId])
+  @@index([buId])
+  @@index([rfxEventId])
+  @@index([awardId])
+  @@index([supplierId])
+  @@index([status])
+  @@index([endDate])
+  @@index([createdAt])
+  @@map("contracts")
+}
+
+model ContractAmendment {
+  id              String    @id @default(uuid())
+  contractId      String
+  contract        Contract  @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  orgId           String
+  amendmentNumber Int
+  title           String
+  description     String?
+  changeType      String    // PRICE_CHANGE | SCOPE_CHANGE | EXTENSION | TERMINATION | OTHER
+  oldValue        Json?
+  newValue        Json?
+  status          String    @default("DRAFT") // DRAFT | APPROVED | REJECTED
+  approvedById    String?
+  approvedAt      DateTime?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([contractId])
+  @@index([orgId])
+  @@map("contract_amendments")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 13: Supplier Portal — Registration
+// ═══════════════════════════════════════════════════════
+
+model SupplierProfile {
+  id                 String    @id @default(uuid())
+  orgId              String    @unique // One profile per supplier org
+  org                Organisation @relation(fields: [orgId], references: [id])
+  companySize        String    @default("SMALL") // MICRO | SMALL | MEDIUM | LARGE | ENTERPRISE
+  yearEstablished    Int?
+  annualRevenue      Decimal?  @db.Decimal(65, 30)
+  registrationNumber String?
+  taxId              String?
+  website            String?
+  primaryContact     Json?     // { name, email, phone }
+  addresses          Json?     // registered + operational addresses
+  bankDetails        Json?     // banking info (encrypted in production)
+  spendCategories    String[]  // from MDM SPEND_CATEGORY
+  certifications     Json?     // array of { name, issuer, validUntil, documentUrl }
+  diversityFlags     Json?     // minority/women/veteran/disability-owned
+  status             String    @default("PENDING_REVIEW") // PENDING_REVIEW | APPROVED | SUSPENDED | BLACKLISTED
+  reviewedById       String?
+  reviewedAt         DateTime?
+  reviewNotes        String?
+  isActive           Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  documents          SupplierDocument[]
+
+  @@index([orgId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("supplier_profiles")
+}
+
+model SupplierDocument {
+  id                String          @id @default(uuid())
+  orgId             String          // supplier org
+  supplierProfileId String
+  supplierProfile   SupplierProfile @relation(fields: [supplierProfileId], references: [id], onDelete: Cascade)
+  documentType      String          // from MDM DOCUMENT_TYPE
+  name              String
+  description       String?
+  fileUrl           String
+  fileSize          Int
+  mimeType          String
+  expiresAt         DateTime?       // for certifications
+  status            String          @default("PENDING") // PENDING | VERIFIED | REJECTED
+  verifiedById      String?
+  verifiedAt        DateTime?
+  isActive          Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([supplierProfileId])
+  @@index([orgId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("supplier_documents")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 14: Supplier Portal — Qualification
+// ═══════════════════════════════════════════════════════
+
+model SupplierQualification {
+  id                  String    @id @default(uuid())
+  orgId               String    // buyer org
+  supplierId          String    // supplier org
+  qualificationType   String    @default("PREQUALIFICATION") // PREQUALIFICATION | DUE_DILIGENCE | ANNUAL_REVIEW
+  status              String    @default("PENDING") // PENDING | IN_PROGRESS | QUALIFIED | DISQUALIFIED | EXPIRED
+  score               Decimal?  @db.Decimal(5, 2) // 0-100
+  maxScore            Int       @default(100)
+  expiresAt           DateTime?
+  qualifiedAt         DateTime?
+  disqualifiedReason  String?
+  responses           Json?     // questionnaire answers
+  isActive            Boolean   @default(true)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([orgId])
+  @@index([supplierId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("supplier_qualifications")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 15: Supplier Portal — Performance
+// ═══════════════════════════════════════════════════════
+
+model SupplierScorecard {
+  id              String    @id @default(uuid())
+  orgId           String    // buyer org
+  supplierId      String    // supplier org
+  period          String    // e.g. "2026-Q1"
+  periodStart     DateTime
+  periodEnd       DateTime
+  overallScore    Decimal   @db.Decimal(5, 2) // 0-100
+  qualityScore    Decimal   @db.Decimal(5, 2) // 0-100
+  deliveryScore   Decimal   @db.Decimal(5, 2) // 0-100
+  priceScore      Decimal   @db.Decimal(5, 2) // 0-100
+  complianceScore Decimal   @db.Decimal(5, 2) // 0-100
+  comments        String?
+  riskLevel       String    @default("LOW") // LOW | MEDIUM | HIGH | CRITICAL
+  createdById     String
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([orgId])
+  @@index([supplierId])
+  @@index([period])
+  @@index([createdAt])
+  @@map("supplier_scorecards")
+}
+
+// ═══════════════════════════════════════════════════════
+// Sprint 15.5: AI Foundation
+// ═══════════════════════════════════════════════════════
+
+model AIInteraction {
+  id           String   @id @default(uuid())
+  orgId        String?
+  userId       String?
+  feature      String   // RFX_DESCRIPTION, BID_ANALYSIS, SUPPLIER_RISK, CONTRACT_ANALYSIS, COPILOT, etc.
+  model        String   @default("claude-sonnet-4-20250514")
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  durationMs   Int      @default(0)
+  success      Boolean  @default(true)
+  errorMessage String?
+  metadata     Json?    // Feature-specific context
+  createdAt    DateTime @default(now())
+
+  @@index([orgId])
+  @@index([userId])
+  @@index([feature])
+  @@index([createdAt])
+  @@map("ai_interactions")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 16: Analytics Dashboards
+// ═══════════════════════════════════════════════════════
+
+model AnalyticsDashboard {
+  id          String   @id @default(uuid())
+  orgId       String
+  title       String
+  type        String   // SPEND | SAVINGS | SUPPLIER_PERFORMANCE | EVENT_ACTIVITY | AUCTION_PERFORMANCE
+  config      Json?    // Dashboard configuration (widgets, filters, date range)
+  isDefault   Boolean  @default(false)
+  createdById String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("analytics_dashboards")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 17: Reporting Engine
+// ═══════════════════════════════════════════════════════
+
+model Report {
+  id             String    @id @default(uuid())
+  orgId          String
+  title          String
+  reportType     String    // EVENT_SUMMARY | BID_COMPARISON | EVALUATION_REPORT | AWARD_SUMMARY | CONTRACT_STATUS | SUPPLIER_REPORT | SPEND_REPORT | CUSTOM
+  parameters     Json?     // Report parameters (date range, filters, groupBy)
+  generatedData  Json?     // Cached report output
+  format         String    @default("JSON") // JSON | CSV | PDF_DATA
+  status         String    @default("DRAFT") // DRAFT | GENERATED | SCHEDULED | ARCHIVED
+  scheduleConfig Json?     // Cron expression + recipients for scheduled reports
+  createdById    String
+  generatedAt    DateTime?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([orgId])
+  @@index([reportType])
+  @@index([status])
+  @@index([createdAt])
+  @@map("reports")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 18: Notifications — In-App & Email
+// ═══════════════════════════════════════════════════════
+
+model Notification {
+  id          String    @id @default(uuid())
+  orgId       String?
+  userId      String
+  type        String    // EVENT_PUBLISHED | BID_RECEIVED | AUCTION_STARTED | EVALUATION_ASSIGNED | AWARD_APPROVED | CONTRACT_EXPIRING | SYSTEM
+  title       String
+  body        String
+  entityType  String?   // RFX_EVENT | AUCTION | EVALUATION | AWARD | CONTRACT
+  entityId    String?
+  isRead      Boolean   @default(false)
+  readAt      DateTime?
+  channel     String    @default("IN_APP") // IN_APP | EMAIL | BOTH
+  emailSentAt DateTime?
+  reminderAt  DateTime? // Sprint 19: scheduled reminder time
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+  @@index([orgId])
+  @@index([isRead])
+  @@index([reminderAt])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  id     String  @id @default(uuid())
+  userId String
+  type   String  // notification type
+  email  Boolean @default(true)
+  inApp  Boolean @default(true)
+
+  @@unique([userId, type])
+  @@map("notification_preferences")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 20: Multi-Currency & Localization
+// ═══════════════════════════════════════════════════════
+
+model ExchangeRate {
+  id            String    @id @default(uuid())
+  orgId         String?   // null = platform default
+  fromCurrency  String
+  toCurrency    String
+  rate          Decimal   @db.Decimal(20, 10)
+  source        String    @default("MANUAL") // MANUAL | API
+  effectiveDate DateTime
+  expiresAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@unique([orgId, fromCurrency, toCurrency, effectiveDate])
+  @@index([orgId])
+  @@index([fromCurrency, toCurrency])
+  @@map("exchange_rates")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 21: Workflow Engine
+// ═══════════════════════════════════════════════════════
+
+model WorkflowTemplate {
+  id          String   @id @default(uuid())
+  orgId       String
+  name        String
+  description String?
+  triggerType String   // EVENT_PUBLISH | AWARD_APPROVAL | CONTRACT_APPROVAL | SUPPLIER_APPROVAL | CUSTOM
+  steps       Json     // Array of { order, approverRole, approverUserId?, condition?, timeoutHours? }
+  isDefault   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workflowInstances WorkflowInstance[]
+
+  @@index([orgId])
+  @@index([triggerType])
+  @@map("workflow_templates")
+}
+
+model WorkflowInstance {
+  id               String            @id @default(uuid())
+  orgId            String
+  templateId       String?
+  template         WorkflowTemplate? @relation(fields: [templateId], references: [id])
+  entityType       String            // RFX_EVENT | AWARD | CONTRACT | SUPPLIER
+  entityId         String
+  status           String            @default("PENDING") // PENDING | IN_PROGRESS | APPROVED | REJECTED | CANCELLED | TIMED_OUT
+  currentStepOrder Int               @default(1)
+  steps            Json              // Snapshot of steps with actual decisions
+  startedAt        DateTime          @default(now())
+  completedAt      DateTime?
+  isActive         Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([orgId])
+  @@index([entityType, entityId])
+  @@index([status])
+  @@map("workflow_instances")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 23: API & Integrations
+// ═══════════════════════════════════════════════════════
+
+model ApiKey {
+  id          String    @id @default(uuid())
+  orgId       String
+  name        String
+  keyHash     String    @unique // SHA256 hash of the API key (never store raw)
+  prefix      String    // First 8 chars for identification (e.g. "esk_live")
+  scopes      String[]  // Array of permission scopes
+  expiresAt   DateTime?
+  lastUsedAt  DateTime?
+  isActive    Boolean   @default(true)
+  createdById String
+  createdAt   DateTime  @default(now())
+
+  @@index([orgId])
+  @@index([keyHash])
+  @@map("api_keys")
+}
+
+model Webhook {
+  id              String    @id @default(uuid())
+  orgId           String
+  url             String
+  events          String[]  // Array of event types to listen to
+  secret          String    // For HMAC signature verification
+  isActive        Boolean   @default(true)
+  lastTriggeredAt DateTime?
+  failureCount    Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([orgId])
+  @@map("webhooks")
+}
+
+// ═══════════════════════════════════════════════════════
+// Migration Sprint 25: Scale & Reliability
+// ═══════════════════════════════════════════════════════
+
+model HealthCheck {
+  id         String   @id @default(uuid())
+  service    String   // API | DATABASE | REDIS | WEBSOCKET | STORAGE
+  status     String   // UP | DOWN | DEGRADED
+  responseMs Int
+  details    Json?
+  checkedAt  DateTime @default(now())
+
+  @@index([service])
+  @@index([checkedAt])
+  @@map("health_checks")
+}
+
+// ── Test Runs (Robot Test Results) ──────────────────────────────────────────────
+
+model TestRun {
+  id              String    @id @default(uuid())
+  status          String    @default("running") // running | passed | failed | error
+  triggeredBy     String?
+  startedAt       DateTime  @default(now())
+  finishedAt      DateTime?
+  durationMs      Int?
+  totalTests      Int       @default(0)
+  passed          Int       @default(0)
+  failed          Int       @default(0)
+  skipped         Int       @default(0)
+  suites          Json?
+  output          String?   @db.Text
+  environment     String    @default("development")
+  createdAt       DateTime  @default(now())
+
+  @@index([status])
+  @@index([startedAt])
+  @@map("test_runs")
+}
